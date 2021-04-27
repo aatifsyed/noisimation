@@ -7,11 +7,17 @@ pub fn print_sequence<I>(images: I, config: &viuer::Config) -> ()
 where
     I: IntoIterator<Item = image::DynamicImage>,
 {
-    for image in images.into_iter() {
+    let mut images = images.into_iter().peekable();
+    std::io::stdout().execute(crossterm::terminal::ScrollDown(crossterm::terminal::size().unwrap().1)).unwrap();
+
+    while let Some(image) = images.next() {
         let (_printed_width, printed_height) = viuer::print(&image, config).unwrap();
-        std::io::stdout()
-            .execute(crossterm::cursor::MoveUp(printed_height as u16))
-            .unwrap();
+
+        if images.peek().is_some() {
+            std::io::stdout()
+                .execute(crossterm::cursor::MoveUp(printed_height as u16))
+                .unwrap();
+        }
     }
 }
 
@@ -63,24 +69,38 @@ mod tests {
     }
 
     #[test]
+    fn generate_value_noise() {
+        let function = noise::Value::default(); // -1, +1
+        let function = noise::Abs::new(&function);
+        // let function = noise::ScaleBias::new(&function).set_bias(1.0);
+        // let function = noise::Exponent::new(&function).set_exponent(10.0);
+        let function = noise::ScaleBias::new(&function).set_scale((std::u16::MAX/2) as f64);
+        let buf = image::ImageBuffer::from_fn(100, 100, |w, h| {
+            let f = function.get([w as f64, h as f64]);
+            image::Luma([f as u16])
+        });
+        let buf = image::DynamicImage::ImageLuma16(buf);
+        viuer::print(&buf, &Default::default()).unwrap();
+    }
+    
+    
+    #[test]
     fn noise_ranges() {
-        struct Function<'f, T> {
-            function: &'f dyn NoiseFn<T>,
-            name: &'f str,
+        macro_rules! range_of_noise_fn {
+            ($noise_fn:expr, $name:expr) => {
+                let v = (0..1000).map(|i| $noise_fn.get([i as f64, 10.0])).collect::<Vec<_>>();
+                let max = v.iter().fold(f64::MIN, |orig, other| f64::max(orig, *other));
+                let min = v.iter().fold(f64::MAX, |orig, other| f64::min(orig, *other));
+                println!("{:7.3?}\t{:7.3?}\t({})", min, max, $name);
+            };
         }
 
-        let checkerboard = noise::Checkerboard::default();
-        let billow = noise::Billow::default();
-
-        let functions: Vec<Function<[f64; 2]>>= vec![Function{function: &checkerboard, name:"checkerboard"}, Function{function: &billow, name:"billow"}];
-
-        // let mut vec: Vec<Function<[f64;2]>> = Vec::new();
-        // vec.push(Function {function: Box::new(noise::Checkerboard::default()), name: "checkerboard"});
-        // vec.push(Function {function: Box::new(noise::Billow::default()), name: "billow"});
-
-        for function in functions {
-            let buf = image::ImageBuffer::from_fn(10, 10, |w, h| {let f = function.function.get([w as f64, h as f64]); image::Luma([f as u16])});
-            println!("{:>15}, max: {:?}, min: {:?}", function.name, buf.pixels().map(|p| p.0).max(), buf.pixels().map(|p|p.0).min());
-        }
+        range_of_noise_fn!(noise::Billow::default(), "billow");
+        range_of_noise_fn!(noise::Checkerboard::default(), "checkerboard");
+        range_of_noise_fn!(noise::Fbm::default(), "fbm");
+        range_of_noise_fn!(noise::OpenSimplex::default(), "opensimplex");
+        range_of_noise_fn!(noise::Perlin::default(), "perlin");
+        range_of_noise_fn!(noise::SuperSimplex::default(), "supersimplex");
+        range_of_noise_fn!(noise::Value::default(), "value");
     }
 }
