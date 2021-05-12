@@ -1,5 +1,5 @@
 use crossterm::ExecutableCommand;
-use image;
+use image::{self, ImageBuffer};
 use noise::{self, NoiseFn};
 use viuer::{self};
 
@@ -47,30 +47,38 @@ impl PrintImage for image::DynamicImage {
     }
 }
 
-pub trait MakeImage<P: image::Pixel, Container>
-where
-    P: image::Pixel,
-{
-    fn make_image(&self, width: u32, height: u32) -> image::ImageBuffer<P, Container>;
+pub fn make_image(
+    from: &dyn NoiseFn<[f64; 3]>,
+    across_width: u32,
+    across_height: u32,
+    at_depth: f64,
+) -> image::ImageBuffer<image::Luma<u16>, Vec<u16>> {
+    image::ImageBuffer::from_fn(across_width, across_height, |x, y| {
+        let value = from.get([x as f64, y as f64, at_depth]);
+        image::Luma([value as u16])
+    })
 }
 
-impl MakeImage<image::Luma<u16>, Vec<u16>> for dyn NoiseFn<[f64; 2]> {
-    fn make_image(
-        &self,
-        width: u32,
-        height: u32,
-    ) -> image::ImageBuffer<image::Luma<u16>, Vec<u16>> {
-        image::ImageBuffer::from_fn(width, height, |x, y| {
-            let value = self.get([x as f64, y as f64]);
-            image::Luma([value as u16])
-        })
-    }
+pub fn make_volume<'d, D>(
+    from: &'d dyn NoiseFn<[f64; 3]>,
+    across_width: u32,
+    across_height: u32,
+    at_depths: D,
+) -> impl Iterator<Item = ImageBuffer<image::Luma<u16>, Vec<u16>>> + 'd
+where
+    D: 'd + IntoIterator<Item = f64>,
+{
+    let v = at_depths
+        .into_iter()
+        .map(move |depth| make_image(from, across_width, across_height, depth));
+    v
 }
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
+    use image::DynamicImage;
+    use itertools_num::linspace;
 
     mod fixtures {
         fn resources_tests() -> std::path::PathBuf {
@@ -102,39 +110,11 @@ mod tests {
     }
 
     #[test]
-    fn make_image() {
-        let function = noise::Checkerboard::default(); // 0s or 1s
-        let function = noise::ScaleBias::new(&function).set_scale(std::u16::MAX as f64)
-            as dyn NoiseFn<[f64; 2]>;
-        function.make_image(100, 100);
-    }
-
-    #[test]
     fn generate_checkerboard() {
         let function = noise::Checkerboard::default(); // 0s or 1s
         let function = noise::ScaleBias::new(&function).set_scale(std::u16::MAX as f64);
-        let buf = image::ImageBuffer::from_fn(10, 10, |w, h| {
-            let f = function.get([w as f64, h as f64]);
-            // println!("{} ({}), {} ({}), -> {} ({})", w, w as f64, h, h as f64, f, f as u16);
-            image::Luma([f as u16])
-        });
-        let buf = image::DynamicImage::ImageLuma16(buf);
-        viuer::print(&buf, &Default::default()).unwrap();
-    }
-
-    #[test]
-    fn generate_value_noise() {
-        let function = noise::Value::default(); // -1, +1
-        let function = noise::Abs::new(&function);
-        // let function = noise::ScaleBias::new(&function).set_bias(1.0);
-        // let function = noise::Exponent::new(&function).set_exponent(10.0);
-        let function = noise::ScaleBias::new(&function).set_scale((std::u16::MAX / 2) as f64);
-        let buf = image::ImageBuffer::from_fn(100, 100, |w, h| {
-            let f = function.get([w as f64, h as f64]);
-            image::Luma([f as u16])
-        });
-        let buf = image::DynamicImage::ImageLuma16(buf);
-        viuer::print(&buf, &Default::default()).unwrap();
+        let image = make_image(&function, 10, 10, 0.0);
+        image::DynamicImage::ImageLuma16(image).print_image(&Default::default());
     }
 
     #[test]
@@ -161,5 +141,14 @@ mod tests {
         range_of_noise_fn!(noise::Perlin::default(), "perlin");
         range_of_noise_fn!(noise::SuperSimplex::default(), "supersimplex");
         range_of_noise_fn!(noise::Value::default(), "value");
+    }
+
+    #[test]
+    fn volume() {
+        let function = noise::OpenSimplex::default();
+        let function = noise::ScaleBias::new(&function).set_scale(std::u16::MAX as f64);
+        make_volume(&function, 100, 100, linspace(0.0, 10.0, 100))
+            .map(|i| DynamicImage::ImageLuma16(i))
+            .print_images(&Default::default());
     }
 }
